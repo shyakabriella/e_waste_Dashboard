@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f6f8fc;
+  font-family: "Helvetica", "Trebuchet MS", "Verdana", sans-serif;
+}
+
+p,
+span,
+a,
+button,
+input,
+textarea,
+select,
+label,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: "Helvetica", "Trebuchet MS", "Verdana", sans-serif;
+}
+
+.pickup-ring {
+  background:
+    conic-gradient(
+      #020617 0deg 230deg,
+      #cbd5e1 230deg 360deg
+    );
+}
