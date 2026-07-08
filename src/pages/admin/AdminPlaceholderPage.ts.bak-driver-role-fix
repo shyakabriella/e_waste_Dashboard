@@ -70,25 +70,12 @@ interface WasteListing {
   wastePhotos?: WastePhoto[]
 }
 
-interface DriverRoleObject {
-  id?: number | string | null
-  name?: string | null
-  slug?: string | null
-}
-
 interface Driver {
   id: number
   name?: string
   email?: string
   phone?: string
-  role?: string | number | DriverRoleObject | null
-  role_id?: number | string | null
-  roleId?: number | string | null
-  role_name?: string | null
-  roleName?: string | null
-  role_slug?: string | null
-  roleSlug?: string | null
-  roles?: DriverRoleObject[]
+  role?: string | { name?: string; slug?: string } | null
   role_name?: string | null
   status?: string
   availability_status?: string | null
@@ -105,18 +92,8 @@ interface Driver {
 type ListingResponse = WasteListing[] | PaginatedResponse<WasteListing>
 type DriverResponse = Driver[] | PaginatedResponse<Driver>
 
-interface BackendRole {
-  id?: number | string | null
-  name?: string | null
-  slug?: string | null
-}
-
-type RoleResponse = BackendRole[] | PaginatedResponse<BackendRole>
-
-
 let driverMatchingListings: WasteListing[] = []
 let driverMatchingDrivers: Driver[] = []
-let backendRoles: BackendRole[] = []
 let selectedMatchingListing: WasteListing | null = null
 let isAssigningDriver = false
 let activeAssignmentEndpoint = '/pickups'
@@ -229,7 +206,7 @@ export function renderAdminPlaceholderPage(title: string, description: string, e
               </h3>
 
               <p class="mt-1 text-xs font-semibold text-slate-400">
-                Drivers are loaded from users with role driver.
+                Drivers are loaded from users/drivers API.
               </p>
 
               <div id="driverMatchingDrivers" class="mt-4 space-y-3">
@@ -268,8 +245,6 @@ async function initDriverMatchingPage(): Promise<void> {
 }
 
 async function loadDriverMatchingData(): Promise<void> {
-  await loadBackendRoles()
-
   await Promise.all([
     loadDriverMatchingListings(),
     loadDriverMatchingDrivers(),
@@ -311,15 +286,6 @@ async function loadDriverMatchingListings(): Promise<void> {
   }
 }
 
-async function loadBackendRoles(): Promise<void> {
-  try {
-    const response = await api.get<RoleResponse>('/roles?per_page=100')
-    backendRoles = normalizeList<BackendRole>(response)
-  } catch {
-    backendRoles = []
-  }
-}
-
 async function loadDriverMatchingDrivers(): Promise<void> {
   const container = document.querySelector<HTMLDivElement>('#driverMatchingDrivers')
 
@@ -330,33 +296,39 @@ async function loadDriverMatchingDrivers(): Promise<void> {
   container.innerHTML = loadingBox('Loading drivers...')
 
   try {
-    // Backend /api/drivers returns users where role = driver.
-    const response = await api.get<DriverResponse>('/drivers?per_page=100&status=active')
-    const drivers = normalizeList<Driver>(response)
+    // Driver is a normal user with role Driver.
+    // Do not call /drivers because backend does not have api/drivers route.
+    const response = await api.get<DriverResponse>('/users?per_page=100')
+    const users = normalizeList<Driver>(response)
+
+    const drivers = users.filter((user) => {
+      const role = getUserRoleName(user).toLowerCase()
+
+      return (
+        role === 'driver' ||
+        role.includes('driver') ||
+        role === 'enviroserve_driver' ||
+        role === 'collector' ||
+        role.includes('collector')
+      )
+    })
 
     driverMatchingDrivers = drivers
 
     if (!drivers.length) {
-      container.innerHTML = emptyBox('No active driver users found. Create a user with role driver first.')
+      container.innerHTML = emptyBox('No users with role Driver found. Create or update a user role to Driver first.')
       renderMatchingPanel()
       return
     }
 
-    container.innerHTML = `
-      <div class="rounded-xl bg-green-50 p-3 text-xs font-black text-green-700">
-        ${drivers.length} active driver user(s) found.
-      </div>
-      ${drivers.map(renderDriverCard).join('')}
-    `
-
+    container.innerHTML = drivers.map(renderDriverCard).join('')
     renderMatchingPanel()
   } catch (error: unknown) {
     driverMatchingDrivers = []
-    container.innerHTML = errorBox(getErrorMessage(error, 'Failed to load drivers from /drivers endpoint.'))
+    container.innerHTML = errorBox(getErrorMessage(error, 'Failed to load users with role Driver.'))
     renderMatchingPanel()
   }
 }
-
 
 function renderMatchingListingsList(): void {
   const container = document.querySelector<HTMLDivElement>('#driverMatchingListings')
@@ -639,43 +611,6 @@ function renderMatchingListingCard(listing: WasteListing): string {
   `
 }
 
-
-function isDriverUser(user: Driver): boolean {
-  const roleName = getUserRoleName(user).toLowerCase()
-  const roleSlug = getUserRoleSlug(user).toLowerCase()
-  const roleId = getUserRoleId(user)
-  const driverRoleIds = getDriverRoleIds()
-
-  if (
-    roleName === 'driver' ||
-    roleSlug === 'driver' ||
-    roleName.includes('driver') ||
-    roleSlug.includes('driver') ||
-    roleName.includes('collector') ||
-    roleSlug.includes('collector')
-  ) {
-    return true
-  }
-
-  if (roleId !== null && driverRoleIds.includes(String(roleId))) {
-    return true
-  }
-
-  return false
-}
-
-function getDriverRoleIds(): string[] {
-  return backendRoles
-    .filter((role) => {
-      const name = String(role.name || '').toLowerCase()
-      const slug = String(role.slug || '').toLowerCase()
-
-      return name === 'driver' || slug === 'driver' || name.includes('driver') || slug.includes('driver')
-    })
-    .map((role) => String(role.id))
-    .filter(Boolean)
-}
-
 function getUserRoleName(user: Driver): string {
   const rawRole = user.role
 
@@ -683,93 +618,11 @@ function getUserRoleName(user: Driver): string {
     return rawRole
   }
 
-  if (typeof rawRole === 'number') {
-    return getRoleNameById(rawRole)
-  }
-
   if (rawRole && typeof rawRole === 'object') {
     return rawRole.name || rawRole.slug || ''
   }
 
-  if (Array.isArray(user.roles) && user.roles.length) {
-    return user.roles.map((role) => role.name || role.slug || '').filter(Boolean).join(', ')
-  }
-
-  const roleId = getUserRoleId(user)
-
-  if (roleId !== null) {
-    return getRoleNameById(roleId)
-  }
-
-  return user.role_name || user.roleName || user.role_slug || user.roleSlug || ''
-}
-
-function getUserRoleSlug(user: Driver): string {
-  const rawRole = user.role
-
-  if (typeof rawRole === 'string') {
-    return rawRole
-  }
-
-  if (rawRole && typeof rawRole === 'object') {
-    return rawRole.slug || rawRole.name || ''
-  }
-
-  if (Array.isArray(user.roles) && user.roles.length) {
-    return user.roles.map((role) => role.slug || role.name || '').filter(Boolean).join(', ')
-  }
-
-  const roleId = getUserRoleId(user)
-
-  if (roleId !== null) {
-    const role = backendRoles.find((item) => String(item.id) === String(roleId))
-    return role?.slug || role?.name || ''
-  }
-
-  return user.role_slug || user.roleSlug || user.role_name || user.roleName || ''
-}
-
-function getUserRoleId(user: Driver): number | string | null {
-  const rawRole = user.role
-
-  if (typeof rawRole === 'number' || typeof rawRole === 'string') {
-    const value = String(rawRole)
-
-    if (/^\d+$/.test(value)) {
-      return value
-    }
-  }
-
-  if (rawRole && typeof rawRole === 'object' && rawRole.id !== undefined && rawRole.id !== null) {
-    return rawRole.id
-  }
-
-  if (user.role_id !== undefined && user.role_id !== null) {
-    return user.role_id
-  }
-
-  if (user.roleId !== undefined && user.roleId !== null) {
-    return user.roleId
-  }
-
-  if (Array.isArray(user.roles) && user.roles.length) {
-    const role = user.roles.find((item) => {
-      const name = String(item.name || '').toLowerCase()
-      const slug = String(item.slug || '').toLowerCase()
-      return name.includes('driver') || slug.includes('driver')
-    })
-
-    if (role?.id !== undefined && role.id !== null) {
-      return role.id
-    }
-  }
-
-  return null
-}
-
-function getRoleNameById(roleId: number | string): string {
-  const role = backendRoles.find((item) => String(item.id) === String(roleId))
-  return role?.name || role?.slug || ''
+  return user.role_name || ''
 }
 
 function renderDriverCard(driver: Driver): string {
@@ -1039,65 +892,26 @@ function getDefaultScheduleValue(): string {
 }
 
 function normalizeList<T>(response: unknown): T[] {
-  const visited = new Set<unknown>()
-
-  const walk = (value: unknown): T[] => {
-    if (!value || visited.has(value)) {
-      return []
-    }
-
-    if (Array.isArray(value)) {
-      return value as T[]
-    }
-
-    if (typeof value !== 'object') {
-      return []
-    }
-
-    visited.add(value)
-
-    const record = value as Record<string, unknown>
-
-    const possibleArrayKeys = [
-      'users',
-      'drivers',
-      'items',
-      'records',
-      'results',
-      'list',
-      'rows',
-      'data',
-    ]
-
-    for (const key of possibleArrayKeys) {
-      const child = record[key]
-
-      if (Array.isArray(child)) {
-        return child as T[]
-      }
-    }
-
-    const possibleObjectKeys = [
-      'data',
-      'payload',
-      'result',
-      'response',
-    ]
-
-    for (const key of possibleObjectKeys) {
-      const found = walk(record[key])
-
-      if (found.length) {
-        return found
-      }
-    }
-
-    return []
+  const value = response as {
+    data?: unknown
   }
 
-  return walk(response)
-}
+  const first = value?.data ?? response
 
+  if (Array.isArray(first)) {
+    return first as T[]
+  }
+
+  const nested = first as {
+    data?: unknown
+  }
+
+  if (Array.isArray(nested?.data)) {
+    return nested.data as T[]
+  }
+
+  return []
+}
 
 function numberOrNull(value: unknown): number | null {
   if (value === null || value === undefined || value === '') {

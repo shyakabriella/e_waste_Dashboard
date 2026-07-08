@@ -229,7 +229,7 @@ export function renderAdminPlaceholderPage(title: string, description: string, e
               </h3>
 
               <p class="mt-1 text-xs font-semibold text-slate-400">
-                Drivers are loaded from users with role driver.
+                Drivers are loaded from users/drivers API.
               </p>
 
               <div id="driverMatchingDrivers" class="mt-4 space-y-3">
@@ -327,24 +327,63 @@ async function loadDriverMatchingDrivers(): Promise<void> {
     return
   }
 
-  container.innerHTML = loadingBox('Loading drivers...')
+  container.innerHTML = loadingBox('Loading drivers from users endpoint...')
 
   try {
-    // Backend /api/drivers returns users where role = driver.
-    const response = await api.get<DriverResponse>('/drivers?per_page=100&status=active')
-    const drivers = normalizeList<Driver>(response)
+    const responses = await Promise.allSettled([
+      api.get<unknown>('/users'),
+      api.get<unknown>('/users?per_page=100'),
+      api.get<unknown>('/users?per_page=1000'),
+      api.get<unknown>('/users?role=driver'),
+      api.get<unknown>('/users?role=Driver'),
+      api.get<unknown>('/users?role_id=2'),
+    ])
+
+    const allUsers: Driver[] = []
+    const debugShapes: string[] = []
+
+    responses.forEach((response, index) => {
+      if (response.status !== 'fulfilled') {
+        debugShapes.push(`endpoint ${index + 1}: failed`)
+        return
+      }
+
+      const users = normalizeList<Driver>(response.value)
+
+      debugShapes.push(`endpoint ${index + 1}: ${users.length} user(s)`)
+
+      users.forEach((user) => {
+        if (!allUsers.some((existing) => String(existing.id) === String(user.id))) {
+          allUsers.push(user)
+        }
+      })
+    })
+
+    const drivers = allUsers.filter(isDriverUser)
 
     driverMatchingDrivers = drivers
 
     if (!drivers.length) {
-      container.innerHTML = emptyBox('No active driver users found. Create a user with role driver first.')
+      container.innerHTML = `
+        <div class="rounded-xl bg-amber-50 p-4 text-sm font-bold text-amber-800">
+          No users with role Driver found in this API response.
+          <br />
+          <span class="text-xs font-semibold">
+            Users loaded: ${allUsers.length}. Driver role IDs detected: ${getDriverRoleIds().join(', ') || 'none'}.
+          </span>
+          <br />
+          <span class="text-xs font-semibold">
+            API checks: ${escapeHtml(debugShapes.join(' | '))}
+          </span>
+        </div>
+      `
       renderMatchingPanel()
       return
     }
 
     container.innerHTML = `
       <div class="rounded-xl bg-green-50 p-3 text-xs font-black text-green-700">
-        ${drivers.length} active driver user(s) found.
+        ${drivers.length} driver user(s) found from backend users endpoint.
       </div>
       ${drivers.map(renderDriverCard).join('')}
     `
@@ -352,7 +391,7 @@ async function loadDriverMatchingDrivers(): Promise<void> {
     renderMatchingPanel()
   } catch (error: unknown) {
     driverMatchingDrivers = []
-    container.innerHTML = errorBox(getErrorMessage(error, 'Failed to load drivers from /drivers endpoint.'))
+    container.innerHTML = errorBox(getErrorMessage(error, 'Failed to load users with role Driver.'))
     renderMatchingPanel()
   }
 }
