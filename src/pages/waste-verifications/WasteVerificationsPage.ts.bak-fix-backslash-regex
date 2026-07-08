@@ -891,7 +891,7 @@ function getPhotoUrl(photo: WastePhoto): string {
   }
 
   let cleanPath = rawPath
-    .replace(/\\/g, '/')
+    .replace(/\/g, '/')
     .replace(/^\/+/, '')
     .replace(/^var\/www\/e_waste_project-Back-end\//, '')
     .replace(/^storage\/app\/public\//, '')

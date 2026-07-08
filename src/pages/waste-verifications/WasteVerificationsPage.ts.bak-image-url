@@ -880,7 +880,7 @@ function getPhotoUrl(photo: WastePhoto): string {
     return normalizeUrl(direct)
   }
 
-  const rawPath = String(photo.photo_path || photo.path || '').trim()
+  const rawPath = photo.photo_path || photo.path || ''
 
   if (!rawPath) {
     return ''
@@ -890,19 +890,12 @@ function getPhotoUrl(photo: WastePhoto): string {
     return rawPath
   }
 
-  let cleanPath = rawPath
-    .replace(/\\/g, '/')
-    .replace(/^\/+/, '')
-    .replace(/^var\/www\/e_waste_project-Back-end\//, '')
-    .replace(/^storage\/app\/public\//, '')
-    .replace(/^app\/public\//, '')
-    .replace(/^public\/storage\//, '')
+  const cleanPath = rawPath
     .replace(/^public\//, '')
     .replace(/^storage\//, '')
+    .replace(/^\/+/, '')
 
-  cleanPath = cleanPath.replace(/^\/+/, '')
-
-  return `https://www.ewaste.asyncafrica.com/storage/${cleanPath}`
+  return `${API_ORIGIN}/storage/${cleanPath}`
 }
 
 function normalizeUrl(url: string): string {
@@ -910,23 +903,23 @@ function normalizeUrl(url: string): string {
     return url
   }
 
-  if (url.startsWith('/storage/')) {
-    return `https://www.ewaste.asyncafrica.com${url}`
-  }
-
-  if (url.startsWith('storage/')) {
-    return `https://www.ewaste.asyncafrica.com/${url}`
-  }
-
   if (url.startsWith('/')) {
-    return `https://www.ewaste.asyncafrica.com${url}`
+    return `${API_ORIGIN}${url}`
   }
 
-  return `https://www.ewaste.asyncafrica.com/${url}`
+  return `${API_ORIGIN}/${url}`
 }
 
 function getApiOrigin(): string {
-  return 'https://www.ewaste.asyncafrica.com'
+  const env = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || ''
+  const fallback = window.location.origin
+
+  try {
+    const url = new URL(env || fallback)
+    return url.origin
+  } catch {
+    return fallback
+  }
 }
 
 function getFirstCategoryIdFromBreakdown(items: AiBreakdownItem[]): number | undefined {
