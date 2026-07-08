@@ -66,30 +66,6 @@ interface WasteListing {
   estimated_weight_kg?: number | string | null
   expected_price?: number | string | null
   currency?: string
-  pickup_address?: string | null
-  pickupAddress?: string | null
-  location?: string | null
-  location_address?: string | null
-  locationAddress?: string | null
-  address?: string | null
-  street_address?: string | null
-  streetAddress?: string | null
-  province?: string | null
-  city?: string | null
-  district?: string | null
-  sector?: string | null
-  cell?: string | null
-  village?: string | null
-  latitude?: number | string | null
-  longitude?: number | string | null
-  lat?: number | string | null
-  lng?: number | string | null
-  pickup_latitude?: number | string | null
-  pickup_longitude?: number | string | null
-  pickupLatitude?: number | string | null
-  pickupLongitude?: number | string | null
-  location_latitude?: number | string | null
-  location_longitude?: number | string | null
   ai_detected_item?: string | null
   ai_detected_category?: string | null
   ai_estimated_weight_kg?: number | string | null
@@ -116,30 +92,6 @@ interface Verification {
   verified_weight_kg?: number | string
   verified_total_price?: number | string
   currency?: string
-  pickup_address?: string | null
-  pickupAddress?: string | null
-  location?: string | null
-  location_address?: string | null
-  locationAddress?: string | null
-  address?: string | null
-  street_address?: string | null
-  streetAddress?: string | null
-  province?: string | null
-  city?: string | null
-  district?: string | null
-  sector?: string | null
-  cell?: string | null
-  village?: string | null
-  latitude?: number | string | null
-  longitude?: number | string | null
-  lat?: number | string | null
-  lng?: number | string | null
-  pickup_latitude?: number | string | null
-  pickup_longitude?: number | string | null
-  pickupLatitude?: number | string | null
-  pickupLongitude?: number | string | null
-  location_latitude?: number | string | null
-  location_longitude?: number | string | null
   waste_listing?: WasteListing
   wasteListing?: WasteListing
   confirmed_category?: WasteCategory
@@ -357,8 +309,6 @@ function renderVerificationPanel(listing: WasteListing): void {
 
       ${renderPhotoInspectionBlock(listing)}
 
-      ${renderLocationBlock(listing)}
-
       <div class="mt-4 grid gap-3 md:grid-cols-4">
         ${summaryCard('AI Kg', formatKg(listing.ai_estimated_weight_kg || latestAi?.estimated_weight_kg || listing.estimated_weight_kg || 0))}
         ${summaryCard('AI Bill', `${listing.currency || 'RWF'} ${formatNumber(listing.expected_price || latestAi?.analysis_result?.expected_price || 0)}`)}
@@ -557,140 +507,6 @@ function bindVerifyForm(breakdown: AiBreakdownItem[], aiAnalysisId?: number): vo
       showMessage(getErrorMessage(error, 'Failed to save verification.'), 'error')
     }
   })
-}
-
-function renderLocationBlock(listing: WasteListing): string {
-  const locationText = getListingLocationText(listing)
-  const coordinates = getListingCoordinates(listing)
-  const mapsUrl = coordinates
-    ? `https://www.google.com/maps?q=${coordinates.lat},${coordinates.lng}`
-    : ''
-
-  if (!locationText && !coordinates) {
-    return `
-      <div class="mt-5 rounded-2xl border border-amber-100 bg-amber-50 p-4">
-        <p class="text-sm font-black text-amber-800">
-          No pickup location found
-        </p>
-        <p class="mt-1 text-xs font-semibold leading-5 text-amber-700">
-          The customer location was not returned with this listing. Confirm location with the customer before pickup or verification.
-        </p>
-      </div>
-    `
-  }
-
-  return `
-    <div class="mt-5 rounded-2xl border border-blue-100 bg-blue-50 p-4">
-      <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-        <div>
-          <p class="text-xs font-black uppercase tracking-[0.18em] text-blue-500">
-            Customer Pickup Location
-          </p>
-
-          <p class="mt-2 text-sm font-black leading-6 text-[#020617]">
-            ${escapeHtml(locationText || 'GPS coordinates provided')}
-          </p>
-
-          ${
-            coordinates
-              ? `<p class="mt-1 text-xs font-bold text-blue-700">GPS: ${escapeHtml(String(coordinates.lat))}, ${escapeHtml(String(coordinates.lng))}</p>`
-              : ''
-          }
-        </div>
-
-        ${
-          coordinates
-            ? `<a href="${escapeAttribute(mapsUrl)}" target="_blank" rel="noopener noreferrer" class="rounded-xl bg-[#020617] px-4 py-2 text-center text-xs font-black text-white">Open Map</a>`
-            : ''
-        }
-      </div>
-    </div>
-  `
-}
-
-function getListingLocationText(listing: WasteListing): string {
-  const record = listing as Record<string, unknown>
-
-  const direct = firstString(record, [
-    'pickup_address',
-    'pickupAddress',
-    'location_address',
-    'locationAddress',
-    'location',
-    'address',
-    'street_address',
-    'streetAddress',
-  ])
-
-  if (direct) {
-    return direct
-  }
-
-  const parts = [
-    firstString(record, ['village']),
-    firstString(record, ['cell']),
-    firstString(record, ['sector']),
-    firstString(record, ['district']),
-    firstString(record, ['city']),
-    firstString(record, ['province']),
-  ].filter(Boolean)
-
-  return parts.join(', ')
-}
-
-function getListingCoordinates(listing: WasteListing): { lat: number; lng: number } | null {
-  const record = listing as Record<string, unknown>
-
-  const lat = firstNumber(record, [
-    'latitude',
-    'lat',
-    'pickup_latitude',
-    'pickupLatitude',
-    'location_latitude',
-  ])
-
-  const lng = firstNumber(record, [
-    'longitude',
-    'lng',
-    'pickup_longitude',
-    'pickupLongitude',
-    'location_longitude',
-  ])
-
-  if (lat === null || lng === null) {
-    return null
-  }
-
-  return { lat, lng }
-}
-
-function firstString(record: Record<string, unknown>, keys: string[]): string {
-  for (const key of keys) {
-    const value = record[key]
-
-    if (typeof value === 'string' && value.trim() !== '') {
-      return value.trim()
-    }
-
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return String(value)
-    }
-  }
-
-  return ''
-}
-
-function firstNumber(record: Record<string, unknown>, keys: string[]): number | null {
-  for (const key of keys) {
-    const value = record[key]
-    const number = Number(value)
-
-    if (Number.isFinite(number) && number !== 0) {
-      return number
-    }
-  }
-
-  return null
 }
 
 function renderPhotoInspectionBlock(listing: WasteListing): string {
@@ -961,7 +777,6 @@ function renderAiBreakdownTable(items: AiBreakdownItem[]): string {
 function renderListingCard(listing: WasteListing): string {
   const photos = getListingPhotos(listing)
   const primaryUrl = photos.length ? getPhotoUrl(photos[0]) : ''
-  const locationText = getListingLocationText(listing)
 
   return `
     <article class="rounded-2xl border border-slate-100 p-4 transition hover:bg-[#f6f8fc]">
