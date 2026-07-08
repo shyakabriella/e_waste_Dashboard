@@ -485,82 +485,39 @@ async function renderQrTagPanel(tag: QrTag): Promise<void> {
   }
 
   const listing = tag.wasteListing || tag.waste_listing
-  const pickup = await resolvePickupForTag(tag)
+  const pickup = tag.pickup || findPickupForListing(tag.waste_listing_id || listing?.id || 0)
   const institution = pickup?.institution || listing?.institution
   const driver = pickup?.driver
   const qrPayload = buildQrPayload(tag, pickup)
   const qrImage = await generateQrImage(qrPayload)
-  const pickupLocation = getPickupLocationText(pickup, listing)
-  const pickupLabel = pickup?.pickup_code || (pickup ? `Pickup #${pickup.id}` : 'No pickup linked')
-  const driverLabel = driver?.name || driver?.email || (pickup?.driver_id ? `Driver #${pickup.driver_id}` : 'No driver linked')
 
   panel.innerHTML = `
-    <div class="space-y-5">
-      <div id="printableQrTag" class="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
-        <div class="bg-[#020617] px-6 py-5 text-white">
-          <p class="text-center text-[11px] font-black uppercase tracking-[0.25em] text-slate-300">
-            E-Waste Pickup Tracking Tag
-          </p>
+    <div>
+      <div id="printableQrTag" class="rounded-[24px] border-2 border-dashed border-slate-300 bg-white p-6">
+        <p class="text-center text-xs font-black uppercase tracking-[0.22em] text-slate-400">
+          E-Waste Pickup Tracking Tag
+        </p>
 
-          <h2 class="mt-2 break-all text-center text-2xl font-black">
-            ${escapeHtml(tag.qr_code || '-')}
-          </h2>
+        <h2 class="mt-2 break-all text-center text-2xl font-black text-[#020617]">
+          ${escapeHtml(tag.qr_code || '-')}
+        </h2>
 
-          <p class="mt-2 text-center text-xs font-bold text-slate-300">
-            Scan this tag during pickup, collection, and confirmation.
-          </p>
+        <div class="mx-auto mt-5 flex h-64 w-64 items-center justify-center rounded-2xl border-4 border-[#020617] bg-white p-3">
+          <img src="${qrImage}" alt="Real QR Code" class="h-full w-full object-contain" />
         </div>
 
-        <div class="grid gap-6 p-6 lg:grid-cols-[300px_1fr]">
-          <div class="rounded-[22px] border-4 border-[#020617] bg-white p-4">
-            <img src="${qrImage}" alt="Real QR Code" class="h-full w-full object-contain" />
-          </div>
-
-          <div class="space-y-4">
-            <div class="grid gap-3 md:grid-cols-2">
-              ${tagDetailCard('Listing', listing?.title || '-')}
-              ${tagDetailCard('Institution', institution?.institution_name || institution?.name || institution?.email || '-')}
-              ${tagDetailCard('Driver', driverLabel)}
-              ${tagDetailCard('Pickup', pickupLabel)}
-              ${tagDetailCard('Schedule', formatPickupSchedule(pickup))}
-              ${tagDetailCard('QR Status', tag.status || '-')}
-            </div>
-
-            <div class="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-              <p class="text-[11px] font-black uppercase tracking-[0.16em] text-blue-500">
-                Pickup Location
-              </p>
-
-              <p class="mt-2 text-sm font-black leading-6 text-[#020617]">
-                ${escapeHtml(pickupLocation || 'No pickup location found')}
-              </p>
-
-              ${
-                pickup?.latitude && pickup?.longitude
-                  ? `<p class="mt-1 text-xs font-bold text-blue-700">GPS: ${escapeHtml(String(pickup.latitude))}, ${escapeHtml(String(pickup.longitude))}</p>`
-                  : ''
-              }
-            </div>
-
-            <div class="rounded-2xl border border-slate-100 bg-[#f6f8fc] p-4">
-              <p class="text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">
-                Scan Information
-              </p>
-
-              <div class="mt-3 grid gap-2 text-xs font-bold text-slate-600">
-                ${scanInfoRow('QR Type', tag.qr_type || '-')}
-                ${scanInfoRow('Created', formatDateTime(tag.created_at || ''))}
-                ${scanInfoRow('Printed', formatDateTime(tag.printed_at || '') || 'Not printed')}
-                ${scanInfoRow('Scanned', formatDateTime(tag.scanned_at || '') || 'Not scanned')}
-                ${scanInfoRow('Scan Purpose', tag.scan_purpose || '-')}
-                ${scanInfoRow('Scan GPS', formatScanGps(tag))}
-              </div>
-            </div>
-          </div>
+        <div class="mt-5 space-y-2 text-sm font-semibold text-slate-600">
+          <p><span class="font-black text-[#020617]">Listing:</span> ${escapeHtml(listing?.title || '-')}</p>
+          <p><span class="font-black text-[#020617]">Institution:</span> ${escapeHtml(institution?.institution_name || institution?.name || '-')}</p>
+          <p><span class="font-black text-[#020617]">Driver:</span> ${escapeHtml(driver?.name || driver?.email || 'No driver linked')}</p>
+          <p><span class="font-black text-[#020617]">Pickup:</span> ${escapeHtml(pickup?.pickup_code || (pickup ? `Pickup #${pickup.id}` : 'No pickup linked'))}</p>
+          <p><span class="font-black text-[#020617]">Pickup Location:</span> ${escapeHtml(getPickupLocationText(pickup, listing))}</p>
+          <p><span class="font-black text-[#020617]">Status:</span> ${escapeHtml(tag.status || '-')}</p>
+          <p><span class="font-black text-[#020617]">Type:</span> ${escapeHtml(tag.qr_type || '-')}</p>
         </div>
       </div>
 
-      <div class="grid gap-3 md:grid-cols-3">
+      <div class="mt-4 grid gap-3 md:grid-cols-3">
         <button id="printQrButton" class="h-11 rounded-xl bg-[#020617] text-sm font-black text-white">
           Print Tag
         </button>
@@ -574,7 +531,7 @@ async function renderQrTagPanel(tag: QrTag): Promise<void> {
         </button>
       </div>
 
-      <form id="scanQrForm" class="rounded-2xl border border-slate-100 bg-[#f6f8fc] p-4">
+      <form id="scanQrForm" class="mt-5 rounded-2xl border border-slate-100 bg-[#f6f8fc] p-4">
         <p class="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
           Scan QR Tag
         </p>
@@ -630,70 +587,6 @@ async function renderQrTagPanel(tag: QrTag): Promise<void> {
   })
 
   bindScanQrForm(tag.id)
-}
-
-
-async function resolvePickupForTag(tag: QrTag): Promise<Pickup | null> {
-  const localByPickupId = tag.pickup_id
-    ? qrPickups.find((pickup) => Number(pickup.id) === Number(tag.pickup_id))
-    : null
-
-  const localByListingId = findPickupForListing(tag.waste_listing_id || tag.wasteListing?.id || tag.waste_listing?.id || 0)
-
-  const local = localByPickupId || localByListingId || tag.pickup || null
-
-  if (local?.driver || !tag.pickup_id) {
-    return local
-  }
-
-  try {
-    const response = await api.get<unknown>(`/pickups/${tag.pickup_id}`)
-    const pickup = unwrapItem<Pickup>(response)
-
-    if (pickup?.id) {
-      qrPickups = [
-        pickup,
-        ...qrPickups.filter((item) => Number(item.id) !== Number(pickup.id)),
-      ]
-
-      return pickup
-    }
-  } catch {
-    return local
-  }
-
-  return local
-}
-
-function tagDetailCard(label: string, value: string): string {
-  return `
-    <div class="rounded-2xl border border-slate-100 bg-[#f6f8fc] p-4">
-      <p class="text-[11px] font-black uppercase tracking-[0.14em] text-slate-400">
-        ${escapeHtml(label)}
-      </p>
-
-      <p class="mt-1 break-words text-sm font-black text-[#020617]">
-        ${escapeHtml(value || '-')}
-      </p>
-    </div>
-  `
-}
-
-function scanInfoRow(label: string, value: string): string {
-  return `
-    <div class="flex items-start justify-between gap-3 rounded-xl bg-white px-3 py-2">
-      <span class="text-slate-400">${escapeHtml(label)}</span>
-      <span class="text-right text-[#020617]">${escapeHtml(value || '-')}</span>
-    </div>
-  `
-}
-
-function formatScanGps(tag: QrTag): string {
-  if (!tag.scan_latitude || !tag.scan_longitude) {
-    return 'Not recorded'
-  }
-
-  return `${tag.scan_latitude}, ${tag.scan_longitude}`
 }
 
 function bindScanQrForm(tagId: number): void {
@@ -809,7 +702,7 @@ function printQrTag(): void {
     return
   }
 
-  const printWindow = window.open('', '_blank', 'width=900,height=760')
+  const printWindow = window.open('', '_blank', 'width=900,height=700')
 
   if (!printWindow) {
     window.print()
@@ -822,151 +715,21 @@ function printQrTag(): void {
       <head>
         <title>E-Waste QR Tag</title>
         <style>
-          * {
-            box-sizing: border-box;
-          }
-
           body {
-            margin: 0;
-            background: #f8fafc;
             font-family: Arial, sans-serif;
-            color: #020617;
             padding: 24px;
           }
 
           .tag {
-            max-width: 720px;
+            max-width: 520px;
             margin: 0 auto;
-            background: #ffffff;
-            border: 1px solid #dbe3ef;
-            border-radius: 24px;
-            overflow: hidden;
-            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
-          }
-
-          .bg-\\[\\#020617\\] {
-            background: #020617 !important;
-            color: white !important;
-          }
-
-          .text-white {
-            color: white !important;
-          }
-
-          .text-slate-300 {
-            color: #cbd5e1 !important;
-          }
-
-          .text-slate-400 {
-            color: #94a3b8 !important;
-          }
-
-          .text-blue-500 {
-            color: #3b82f6 !important;
-          }
-
-          .text-blue-700 {
-            color: #1d4ed8 !important;
-          }
-
-          .text-\\[\\#020617\\] {
-            color: #020617 !important;
-          }
-
-          .bg-\\[\\#f6f8fc\\] {
-            background: #f6f8fc !important;
-          }
-
-          .bg-blue-50 {
-            background: #eff6ff !important;
-          }
-
-          .border {
-            border: 1px solid #e2e8f0;
-          }
-
-          .border-4 {
-            border: 4px solid #020617;
-          }
-
-          .rounded-2xl,
-          .rounded-\\[22px\\],
-          .rounded-\\[28px\\] {
-            border-radius: 18px;
-          }
-
-          .p-4 {
-            padding: 16px;
-          }
-
-          .p-6 {
-            padding: 24px;
-          }
-
-          .px-6 {
-            padding-left: 24px;
-            padding-right: 24px;
-          }
-
-          .py-5 {
-            padding-top: 20px;
-            padding-bottom: 20px;
-          }
-
-          .mt-1 { margin-top: 4px; }
-          .mt-2 { margin-top: 8px; }
-          .mt-3 { margin-top: 12px; }
-          .mt-5 { margin-top: 20px; }
-
-          .text-center { text-align: center; }
-          .text-right { text-align: right; }
-          .font-black { font-weight: 900; }
-          .font-bold { font-weight: 700; }
-          .uppercase { text-transform: uppercase; }
-          .break-all { word-break: break-all; }
-          .break-words { word-break: break-word; }
-
-          .grid {
-            display: grid;
-            gap: 16px;
-          }
-
-          .lg\\:grid-cols-\\[300px_1fr\\] {
-            grid-template-columns: 260px 1fr;
-          }
-
-          .md\\:grid-cols-2 {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
           }
 
           img {
-            max-width: 100%;
-            display: block;
-          }
-
-          .h-full {
-            height: 100%;
-          }
-
-          .w-full {
-            width: 100%;
-          }
-
-          @media print {
-            body {
-              background: white;
-              padding: 0;
-            }
-
-            .tag {
-              box-shadow: none;
-              border: 1px solid #111827;
-              max-width: 100%;
-            }
+            max-width: 260px;
           }
         </style>
       </head>
-
       <body>
         <div class="tag">
           ${printable.innerHTML}
@@ -983,7 +746,6 @@ function printQrTag(): void {
 
   printWindow.document.close()
 }
-
 
 function renderListingCard(listing: WasteListing): string {
   const pickup = findPickupForListing(listing.id)
