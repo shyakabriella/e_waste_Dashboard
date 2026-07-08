@@ -150,14 +150,6 @@ type ListingResponse = WasteListing[] | PaginatedResponse<WasteListing>
 type CategoryResponse = WasteCategory[] | PaginatedResponse<WasteCategory>
 type VerificationResponse = Verification[] | PaginatedResponse<Verification>
 
-interface ReverseGeocodeResult {
-  success?: boolean
-  display_name?: string | null
-  short_name?: string | null
-  error?: string | null
-}
-
-
 let categories: WasteCategory[] = []
 let selectedListing: WasteListing | null = null
 let isSavingVerification = false
@@ -458,7 +450,6 @@ function renderVerificationPanel(listing: WasteListing): void {
 
   bindVerifyForm(breakdown, latestAi?.id)
   bindPhotoPreview()
-  resolveLocationPlace(listing)
   calculateFinalPrice()
 }
 
@@ -571,6 +562,9 @@ function bindVerifyForm(breakdown: AiBreakdownItem[], aiAnalysisId?: number): vo
 function renderLocationBlock(listing: WasteListing): string {
   const locationText = getListingLocationText(listing)
   const coordinates = getListingCoordinates(listing)
+  const mapsUrl = coordinates
+    ? `https://www.google.com/maps?q=${coordinates.lat},${coordinates.lng}`
+    : ''
 
   if (!locationText && !coordinates) {
     return `
@@ -588,13 +582,13 @@ function renderLocationBlock(listing: WasteListing): string {
   return `
     <div class="mt-5 rounded-2xl border border-blue-100 bg-blue-50 p-4">
       <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-        <div class="min-w-0 flex-1">
+        <div>
           <p class="text-xs font-black uppercase tracking-[0.18em] text-blue-500">
             Customer Pickup Location
           </p>
 
-          <p id="resolvedLocationName" class="mt-2 text-sm font-black leading-6 text-[#020617]">
-            ${escapeHtml(locationText || 'Resolving exact place from GPS...')}
+          <p class="mt-2 text-sm font-black leading-6 text-[#020617]">
+            ${escapeHtml(locationText || 'GPS coordinates provided')}
           </p>
 
           ${
@@ -602,17 +596,11 @@ function renderLocationBlock(listing: WasteListing): string {
               ? `<p class="mt-1 text-xs font-bold text-blue-700">GPS: ${escapeHtml(String(coordinates.lat))}, ${escapeHtml(String(coordinates.lng))}</p>`
               : ''
           }
-
-          ${
-            coordinates
-              ? `<p id="reverseGeocodeStatus" class="mt-1 text-[11px] font-bold text-slate-500">Finding nearest address...</p>`
-              : ''
-          }
         </div>
 
         ${
           coordinates
-            ? `<button type="button" id="refreshLocationNameButton" class="rounded-xl bg-[#020617] px-4 py-2 text-center text-xs font-black text-white">Refresh Place</button>`
+            ? `<a href="${escapeAttribute(mapsUrl)}" target="_blank" rel="noopener noreferrer" class="rounded-xl bg-[#020617] px-4 py-2 text-center text-xs font-black text-white">Open Map</a>`
             : ''
         }
       </div>
@@ -703,61 +691,6 @@ function firstNumber(record: Record<string, unknown>, keys: string[]): number | 
   }
 
   return null
-}
-
-async function resolveLocationPlace(listing: WasteListing): Promise<void> {
-  const coordinates = getListingCoordinates(listing)
-  const nameBox = document.querySelector<HTMLParagraphElement>('#resolvedLocationName')
-  const statusBox = document.querySelector<HTMLParagraphElement>('#reverseGeocodeStatus')
-  const button = document.querySelector<HTMLButtonElement>('#refreshLocationNameButton')
-
-  if (!coordinates || !nameBox) {
-    return
-  }
-
-  const loadPlace = async () => {
-    try {
-      if (statusBox) {
-        statusBox.textContent = 'Finding nearest address...'
-      }
-
-      if (button) {
-        button.disabled = true
-        button.textContent = 'Resolving...'
-      }
-
-      const result = await api.get<ReverseGeocodeResult>(
-        `/geocode/reverse?lat=${encodeURIComponent(String(coordinates.lat))}&lng=${encodeURIComponent(String(coordinates.lng))}`,
-      )
-
-      const place = result.short_name || result.display_name
-
-      if (place) {
-        nameBox.textContent = place
-      } else {
-        nameBox.textContent = getListingLocationText(listing) || 'GPS location available, but address was not found.'
-      }
-
-      if (statusBox) {
-        statusBox.textContent = result.provider
-          ? `Resolved by ${result.provider}`
-          : 'Nearest address resolved'
-      }
-    } catch {
-      if (statusBox) {
-        statusBox.textContent = 'Could not convert GPS to place name. GPS coordinates are still available.'
-      }
-    } finally {
-      if (button) {
-        button.disabled = false
-        button.textContent = 'Refresh Place'
-      }
-    }
-  }
-
-  button?.addEventListener('click', loadPlace)
-
-  await loadPlace()
 }
 
 function renderPhotoInspectionBlock(listing: WasteListing): string {
