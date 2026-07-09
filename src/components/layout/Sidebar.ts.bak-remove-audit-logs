@@ -40,6 +40,13 @@ const sidebarGroups: SidebarGroup[] = [
       { label: 'Wallet', href: '/wallet-transactions', icon: '▧' },
     ],
   },
+  {
+    title: 'System',
+    links: [
+      { label: 'Audit Logs', href: '/audit-logs', icon: '◎' },
+      { label: 'Settings', href: '/settings', icon: '⚙' },
+    ],
+  },
 ]
 
 export function Sidebar(): string {

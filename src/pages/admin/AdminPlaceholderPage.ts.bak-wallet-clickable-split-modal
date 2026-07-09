@@ -171,29 +171,6 @@ interface WalletPayout {
   } | null
 }
 
-
-interface WalletPickup {
-  id: number
-  waste_listing_id?: number | string | null
-  driver_id?: number | string | null
-  pickup_code?: string | null
-  status?: string | null
-  driver?: WalletUser | null
-  waste_listing?: WasteListing | null
-  wasteListing?: WasteListing | null
-}
-
-interface WalletShareRow {
-  owner: string
-  listing: string
-  base: number
-  amount: number
-  note: string
-  currency?: string | null
-}
-
-type WalletPickupResponse = WalletPickup[] | PaginatedResponse<WalletPickup>
-
 interface WalletCommission {
   id: number
   institution_id?: number | null
@@ -232,7 +209,6 @@ let walletPayouts: WalletPayout[] = []
 let walletCommissions: WalletCommission[] = []
 let activeWalletEndpoint = '/wallet-transactions'
 let walletWasteListings: WasteListing[] = []
-let walletPickups: WalletPickup[] = []
 
 
 export function renderAdminPlaceholderPage(title: string, description: string, endpoint: string): string {
@@ -417,7 +393,6 @@ async function loadWalletData(): Promise<void> {
     loadWalletPayouts(),
     loadWalletCommissions(),
     loadWalletWasteListings(),
-    loadWalletPickups(),
   ])
 
   renderWalletDashboard()
@@ -499,13 +474,6 @@ async function loadWalletWasteListings(): Promise<void> {
   walletWasteListings = listings
 }
 
-
-async function loadWalletPickups(): Promise<void> {
-  walletPickups = await loadFirstAvailableList<WalletPickup>([
-    '/pickups?per_page=500',
-  ])
-}
-
 async function loadFirstAvailableList<T>(endpoints: string[]): Promise<T[]> {
   for (const endpoint of endpoints) {
     try {
@@ -524,22 +492,33 @@ async function loadFirstAvailableList<T>(endpoints: string[]): Promise<T[]> {
 }
 
 function renderWalletDashboard(): void {
+  const totalCredits = walletTransactions
+    .filter((transaction) => isCreditTransaction(transaction))
+    .reduce((sum, transaction) => sum + parseMoney(transaction.amount), 0)
+
+  const totalDebits = walletTransactions
+    .filter((transaction) => !isCreditTransaction(transaction))
+    .reduce((sum, transaction) => sum + parseMoney(transaction.amount), 0)
+
   const totalWasteValue = walletWasteListings.reduce((sum, listing) => {
     return sum + getListingMoneyValue(listing)
   }, 0)
 
-  const platformCommission = calculateShare(totalWasteValue, 20)
-  const driverAssignedMoney = calculateShare(totalWasteValue, 30)
+  const systemCommission = calculateShare(totalWasteValue, 20)
+  const driverMoney = calculateShare(totalWasteValue, 30)
   const recyclerCompanyMoney = calculateShare(totalWasteValue, 50)
 
   showWalletContent(`
-    <div id="walletModalRoot"></div>
-
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
       ${walletMetricCard('Total E-Waste Value', formatMoney(totalWasteValue), 'All listed e-waste')}
-      ${walletClickableMetricCard('Platform commission', formatMoney(platformCommission), '20% system commission', 'platform')}
-      ${walletClickableMetricCard('Driver assigned', formatMoney(driverAssignedMoney), '30% assigned to drivers', 'driver')}
-      ${walletClickableMetricCard('Recycler company', formatMoney(recyclerCompanyMoney), '50% recycler company share', 'recycler')}
+      ${walletMetricCard('System Commission', formatMoney(systemCommission), '20% system share')}
+      ${walletMetricCard('Driver Money', formatMoney(driverMoney), '30% driver share')}
+      ${walletMetricCard('Recycler Company', formatMoney(recyclerCompanyMoney), '50% recycler share')}
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-2">
+      ${walletMetricCard('Total Credits', formatMoney(totalCredits), 'Money added')}
+      ${walletMetricCard('Total Debits', formatMoney(totalDebits), 'Money removed')}
     </div>
 
     <div class="flex flex-col gap-3 rounded-[24px] bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
@@ -565,11 +544,11 @@ function renderWalletDashboard(): void {
           </h3>
 
           <p class="mt-1 text-xs font-semibold text-slate-400">
-            Click a balance type to see detailed commission by e-waste item.
+            These balances are calculated from the percentage rule, not from old zero wallet values.
           </p>
 
           <div class="mt-4 space-y-3">
-            ${renderCalculatedWalletBalances(platformCommission, driverAssignedMoney, recyclerCompanyMoney)}
+            ${renderCalculatedWalletBalances(systemCommission, driverMoney, recyclerCompanyMoney)}
           </div>
         </div>
       </div>
@@ -611,15 +590,13 @@ function renderWalletDashboard(): void {
       showWalletMessage(getErrorMessage(error, 'Failed to refresh wallet information.'), 'error')
     })
   })
-
-  bindWalletShareCards()
 }
 
 function renderWasteMoneyTable(listings: WasteListing[]): string {
   const rows = listings.map((listing) => {
     const total = getListingMoneyValue(listing)
-    const platformCommission = calculateShare(total, 20)
-    const driverAssigned = calculateShare(total, 30)
+    const systemCommission = calculateShare(total, 20)
+    const driver = calculateShare(total, 30)
     const recyclerCompany = calculateShare(total, 50)
 
     return `
@@ -629,8 +606,8 @@ function renderWasteMoneyTable(listings: WasteListing[]): string {
           <p class="mt-1 text-[11px] font-bold text-slate-400">${escapeHtml(getInstitutionName(listing))}</p>
         </td>
         <td class="whitespace-nowrap px-3 py-3 text-right text-xs font-black text-[#020617]">${escapeHtml(formatMoney(total, listing.currency || 'RWF'))}</td>
-        <td class="whitespace-nowrap px-3 py-3 text-right text-xs font-black text-blue-700">${escapeHtml(formatMoney(platformCommission, listing.currency || 'RWF'))}</td>
-        <td class="whitespace-nowrap px-3 py-3 text-right text-xs font-black text-green-700">${escapeHtml(formatMoney(driverAssigned, listing.currency || 'RWF'))}</td>
+        <td class="whitespace-nowrap px-3 py-3 text-right text-xs font-black text-blue-700">${escapeHtml(formatMoney(systemCommission, listing.currency || 'RWF'))}</td>
+        <td class="whitespace-nowrap px-3 py-3 text-right text-xs font-black text-green-700">${escapeHtml(formatMoney(driver, listing.currency || 'RWF'))}</td>
         <td class="whitespace-nowrap px-3 py-3 text-right text-xs font-black text-purple-700">${escapeHtml(formatMoney(recyclerCompany, listing.currency || 'RWF'))}</td>
       </tr>
     `
@@ -642,9 +619,9 @@ function renderWasteMoneyTable(listings: WasteListing[]): string {
         <tr class="border-b border-slate-200 bg-[#f6f8fc]">
           <th class="px-3 py-3 text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">E-Waste</th>
           <th class="px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Total</th>
-          <th class="px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Platform 20%</th>
-          <th class="px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Driver assigned 30%</th>
-          <th class="px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Recycler company 50%</th>
+          <th class="px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">System 20%</th>
+          <th class="px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Driver 30%</th>
+          <th class="px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Recycler Company 50%</th>
         </tr>
       </thead>
       <tbody>
@@ -669,33 +646,52 @@ function calculateShare(total: number, percentage: number): number {
 }
 
 function renderCalculatedWalletBalances(
-  platformCommission: number,
-  driverAssignedMoney: number,
+  systemCommission: number,
+  driverMoney: number,
   recyclerCompanyMoney: number,
 ): string {
-  return [
-    renderAssignedBalanceCard({
-      title: 'Platform commission',
-      subtitle: 'System commission from all listed e-waste',
-      percent: '20%',
-      amount: platformCommission,
-      modalType: 'platform',
-    }),
-    renderAssignedBalanceCard({
-      title: 'Driver assigned',
-      subtitle: 'Driver commission based on assigned pickups',
+  const drivers = walletUsers.filter((user) => {
+    const role = getWalletUserRole(user).toLowerCase()
+    return role.includes('driver')
+  })
+
+  const driverSharePerUser = drivers.length ? driverMoney / drivers.length : driverMoney
+
+  const cards: string[] = []
+
+  cards.push(renderAssignedBalanceCard({
+    title: 'System Commission',
+    subtitle: 'Platform commission',
+    percent: '20%',
+    amount: systemCommission,
+  }))
+
+  if (drivers.length) {
+    drivers.forEach((driver) => {
+      cards.push(renderAssignedBalanceCard({
+        title: driver.name || driver.email || `Driver #${driver.id}`,
+        subtitle: 'Driver assigned share',
+        percent: drivers.length > 1 ? `30% / ${drivers.length} drivers` : '30%',
+        amount: driverSharePerUser,
+      }))
+    })
+  } else {
+    cards.push(renderAssignedBalanceCard({
+      title: 'Driver Wallet Pool',
+      subtitle: 'No driver user found, showing total driver share',
       percent: '30%',
-      amount: driverAssignedMoney,
-      modalType: 'driver',
-    }),
-    renderAssignedBalanceCard({
-      title: 'Recycler company',
-      subtitle: 'Recycler company share',
-      percent: '50%',
-      amount: recyclerCompanyMoney,
-      modalType: 'recycler',
-    }),
-  ].join('')
+      amount: driverMoney,
+    }))
+  }
+
+  cards.push(renderAssignedBalanceCard({
+    title: 'Recycler Company',
+    subtitle: 'Recycler company share',
+    percent: '50%',
+    amount: recyclerCompanyMoney,
+  }))
+
+  return cards.join('')
 }
 
 function renderAssignedBalanceCard(data: {
@@ -703,12 +699,9 @@ function renderAssignedBalanceCard(data: {
   subtitle: string
   percent: string
   amount: number
-  modalType?: string
 }): string {
-  const modalAttribute = data.modalType ? `data-wallet-modal="${escapeAttribute(data.modalType)}"` : ''
-
   return `
-    <article ${modalAttribute} class="cursor-pointer rounded-2xl border border-slate-100 p-4 transition hover:border-[#020617] hover:bg-[#f6f8fc]">
+    <article class="rounded-2xl border border-slate-100 p-4">
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0 flex-1">
           <p class="truncate font-black text-[#020617]">${escapeHtml(data.title)}</p>
@@ -722,9 +715,6 @@ function renderAssignedBalanceCard(data: {
           <p class="text-xs font-black uppercase text-slate-400">Assigned</p>
           <p class="mt-1 text-sm font-black text-green-700">
             ${escapeHtml(formatMoney(data.amount))}
-          </p>
-          <p class="mt-1 text-[10px] font-black uppercase text-blue-700">
-            Click view
           </p>
         </div>
       </div>
@@ -842,242 +832,6 @@ function renderWalletCommissionCard(commission: WalletCommission): string {
         </div>
       </div>
     </article>
-  `
-}
-
-function walletClickableMetricCard(label: string, value: string, helper: string, modalType: string): string {
-  return `
-    <button data-wallet-modal="${escapeAttribute(modalType)}" class="rounded-[24px] bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-      <p class="text-[11px] font-black uppercase tracking-[0.14em] text-slate-400">
-        ${escapeHtml(label)}
-      </p>
-      <p class="mt-2 text-2xl font-black text-[#020617]">
-        ${escapeHtml(value)}
-      </p>
-      <p class="mt-1 text-xs font-semibold text-slate-400">
-        ${escapeHtml(helper)}
-      </p>
-      <p class="mt-3 text-[10px] font-black uppercase tracking-[0.16em] text-blue-700">
-        Click to view details
-      </p>
-    </button>
-  `
-}
-
-function bindWalletShareCards(): void {
-  document.querySelectorAll<HTMLElement>('[data-wallet-modal]').forEach((element) => {
-    element.addEventListener('click', () => {
-      const type = element.dataset.walletModal || ''
-      openWalletModal(type)
-    })
-  })
-}
-
-function openWalletModal(type: string): void {
-  const root = document.querySelector<HTMLDivElement>('#walletModalRoot')
-
-  if (!root) {
-    return
-  }
-
-  const modal = getWalletModalContent(type)
-
-  root.innerHTML = `
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-6">
-      <div class="max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-[28px] bg-white shadow-2xl">
-        <div class="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
-          <div>
-            <p class="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-              Money Breakdown
-            </p>
-            <h2 class="mt-1 text-2xl font-black text-[#020617]">
-              ${escapeHtml(modal.title)}
-            </h2>
-            <p class="mt-1 text-sm font-semibold text-slate-500">
-              ${escapeHtml(modal.description)}
-            </p>
-          </div>
-
-          <button id="closeWalletModalButton" class="rounded-xl bg-[#020617] px-4 py-2 text-xs font-black text-white">
-            Close
-          </button>
-        </div>
-
-        <div class="max-h-[70vh] overflow-y-auto p-6">
-          ${modal.html}
-        </div>
-      </div>
-    </div>
-  `
-
-  document.querySelector<HTMLButtonElement>('#closeWalletModalButton')?.addEventListener('click', closeWalletModal)
-  root.querySelector('.fixed')?.addEventListener('click', (event) => {
-    if (event.target === event.currentTarget) {
-      closeWalletModal()
-    }
-  })
-}
-
-function closeWalletModal(): void {
-  const root = document.querySelector<HTMLDivElement>('#walletModalRoot')
-
-  if (root) {
-    root.innerHTML = ''
-  }
-}
-
-function getWalletModalContent(type: string): { title: string; description: string; html: string } {
-  if (type === 'driver') {
-    const rows = getDriverShareRows()
-    return {
-      title: 'Driver assigned',
-      description: '30% share distributed by assigned pickup driver. If more than one driver is assigned to one e-waste item, the driver share is split between them.',
-      html: renderShareRowsTable(rows),
-    }
-  }
-
-  if (type === 'recycler') {
-    const rows = getRecyclerShareRows()
-    return {
-      title: 'Recycler company',
-      description: '50% share for recycler company per listed e-waste item.',
-      html: renderShareRowsTable(rows),
-    }
-  }
-
-  const rows = getPlatformShareRows()
-
-  return {
-    title: 'Platform commission',
-    description: '20% system commission calculated per listed e-waste item.',
-    html: renderShareRowsTable(rows),
-  }
-}
-
-function getPlatformShareRows(): WalletShareRow[] {
-  return walletWasteListings.map((listing) => {
-    const base = getListingMoneyValue(listing)
-
-    return {
-      owner: 'Platform commission',
-      listing: listing.title || `Listing #${listing.id}`,
-      base,
-      amount: calculateShare(base, 20),
-      note: getInstitutionName(listing),
-      currency: listing.currency || 'RWF',
-    }
-  })
-}
-
-function getDriverShareRows(): WalletShareRow[] {
-  const rows: WalletShareRow[] = []
-
-  walletWasteListings.forEach((listing) => {
-    const base = getListingMoneyValue(listing)
-    const listingPickups = walletPickups.filter((pickup) => {
-      return String(pickup.waste_listing_id || pickup.wasteListing?.id || pickup.waste_listing?.id || '') === String(listing.id)
-    })
-
-    const assignedPickups = listingPickups.filter((pickup) => pickup.driver_id || pickup.driver)
-
-    if (!assignedPickups.length) {
-      rows.push({
-        owner: 'Unassigned driver pool',
-        listing: listing.title || `Listing #${listing.id}`,
-        base,
-        amount: calculateShare(base, 30),
-        note: 'No driver assigned yet',
-        currency: listing.currency || 'RWF',
-      })
-      return
-    }
-
-    const sharePerDriver = calculateShare(base, 30) / assignedPickups.length
-
-    assignedPickups.forEach((pickup) => {
-      rows.push({
-        owner: pickup.driver?.name || pickup.driver?.email || `Driver #${pickup.driver_id || '-'}`,
-        listing: listing.title || `Listing #${listing.id}`,
-        base,
-        amount: sharePerDriver,
-        note: pickup.pickup_code || `Pickup #${pickup.id}`,
-        currency: listing.currency || 'RWF',
-      })
-    })
-  })
-
-  return rows
-}
-
-function getRecyclerShareRows(): WalletShareRow[] {
-  return walletWasteListings.map((listing) => {
-    const base = getListingMoneyValue(listing)
-
-    return {
-      owner: getRecyclerCompanyName(listing),
-      listing: listing.title || `Listing #${listing.id}`,
-      base,
-      amount: calculateShare(base, 50),
-      note: getInstitutionName(listing),
-      currency: listing.currency || 'RWF',
-    }
-  })
-}
-
-function getRecyclerCompanyName(listing: WasteListing): string {
-  const record = listing as Record<string, unknown>
-  const possibleObject = record.recyclerCompany || record.recycler_company || record.recycler || record.company
-
-  if (possibleObject && typeof possibleObject === 'object') {
-    const recycler = possibleObject as Record<string, unknown>
-    return firstString(recycler, ['institution_name', 'name', 'email']) || 'Recycler company'
-  }
-
-  return firstString(record, [
-    'recycler_company_name',
-    'recyclerCompanyName',
-    'recycler_name',
-    'company_name',
-  ]) || 'Recycler company'
-}
-
-function renderShareRowsTable(rows: WalletShareRow[]): string {
-  const total = rows.reduce((sum, row) => sum + row.amount, 0)
-
-  if (!rows.length) {
-    return emptyBox('No breakdown records found.')
-  }
-
-  return `
-    <div class="mb-4 grid gap-4 md:grid-cols-2">
-      ${walletMetricCard('Records', String(rows.length), 'Breakdown rows')}
-      ${walletMetricCard('Total Amount', formatMoney(total), 'Calculated total')}
-    </div>
-
-    <div class="overflow-x-auto rounded-2xl border border-slate-100">
-      <table class="w-full min-w-[820px] border-collapse text-left">
-        <thead>
-          <tr class="border-b border-slate-200 bg-[#f6f8fc]">
-            <th class="px-3 py-3 text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Assigned To</th>
-            <th class="px-3 py-3 text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">E-Waste</th>
-            <th class="px-3 py-3 text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Reference</th>
-            <th class="px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">E-Waste Value</th>
-            <th class="px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Assigned Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.map((row) => `
-            <tr class="border-b border-slate-100">
-              <td class="min-w-[180px] px-3 py-3 text-xs font-black text-[#020617]">${escapeHtml(row.owner)}</td>
-              <td class="min-w-[220px] px-3 py-3 text-xs font-bold text-slate-600">${escapeHtml(row.listing)}</td>
-              <td class="min-w-[160px] px-3 py-3 text-xs font-bold text-slate-400">${escapeHtml(row.note)}</td>
-              <td class="whitespace-nowrap px-3 py-3 text-right text-xs font-black text-slate-700">${escapeHtml(formatMoney(row.base, row.currency || 'RWF'))}</td>
-              <td class="whitespace-nowrap px-3 py-3 text-right text-xs font-black text-green-700">${escapeHtml(formatMoney(row.amount, row.currency || 'RWF'))}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    </div>
   `
 }
 

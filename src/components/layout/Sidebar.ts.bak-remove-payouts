@@ -38,6 +38,15 @@ const sidebarGroups: SidebarGroup[] = [
     links: [
       { label: 'Pickups', href: '/pickups', icon: '▥' },
       { label: 'Wallet', href: '/wallet-transactions', icon: '▧' },
+      { label: 'Payouts', href: '/payouts', icon: '◈' },
+    ],
+  },
+  {
+    title: 'System',
+    links: [
+      { label: 'Commissions', href: '/commissions', icon: '%' },
+      { label: 'Audit Logs', href: '/audit-logs', icon: '◎' },
+      { label: 'Settings', href: '/settings', icon: '⚙' },
     ],
   },
 ]
@@ -71,7 +80,6 @@ export function Sidebar(): string {
         <div class="absolute bottom-4 left-4 right-4">
           <button
             id="logoutButton"
-            
             type="button"
             class="flex w-full items-center gap-3 rounded-2xl bg-[#020617] px-4 py-2.5 text-sm font-black text-white shadow-lg shadow-slate-950/20 transition hover:bg-red-600"
           >

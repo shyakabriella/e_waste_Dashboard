@@ -174,7 +174,7 @@ export function renderAdminPlaceholderPage(title: string, description: string, e
                     Institution E-Waste
                   </h3>
                   <p class="mt-1 text-xs font-semibold text-slate-400">
-                    Choose verified waste ready for pickup.
+                    Choose verified waste ready for pickup .
                   </p>
                 </div>
 
