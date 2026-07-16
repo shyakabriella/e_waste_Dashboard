@@ -89,7 +89,6 @@ interface Driver {
   role_slug?: string | null
   roleSlug?: string | null
   roles?: DriverRoleObject[]
-  role_name?: string | null
   status?: string
   availability_status?: string | null
   current_latitude?: number | string | null
@@ -192,6 +191,25 @@ interface WalletShareRow {
   currency?: string | null
 }
 
+type WalletPayableType = 'driver' | 'recycler'
+
+interface WalletMomoPayoutRecord {
+  paid_amount: number
+  phone: string
+  reference: string
+  paid_at: string
+}
+
+interface WalletMomoPayoutProgress {
+  assigned: number
+  paid: number
+  remaining: number
+  phone: string
+  reference: string
+  paidAt: string
+  isPaid: boolean
+}
+
 type WalletPickupResponse = WalletPickup[] | PaginatedResponse<WalletPickup>
 
 interface WalletCommission {
@@ -234,6 +252,10 @@ let activeWalletEndpoint = '/wallet-transactions'
 let walletWasteListings: WasteListing[] = []
 let walletPickups: WalletPickup[] = []
 
+const WALLET_MOMO_PAYOUT_STORAGE_KEY = 'ewaste_wallet_momo_payouts_v1'
+let isProcessingMomoPayment = false
+let walletMomoPayoutRecords = createEmptyWalletMomoPayoutRecords()
+
 
 export function renderAdminPlaceholderPage(title: string, description: string, endpoint: string): string {
   const shouldRenderWallet = /wallet|transaction|payout|commission|finance|payment|balance/i.test(
@@ -269,8 +291,7 @@ export function renderAdminPlaceholderPage(title: string, description: string, e
             </p>
           </section>
 
-          <div id="walletMessage" class="hidden rounded-xl p
-          x-4 py-3 text-sm font-bold"></div>
+          <div id="walletMessage" class="hidden rounded-xl px-4 py-3 text-sm font-bold"></div>
 
           <section id="walletDashboardContent" class="space-y-5">
             ${loadingBox('Loading wallet information...')}
@@ -405,6 +426,7 @@ export function renderAdminPlaceholderPage(title: string, description: string, e
 
 
 async function initWalletPage(): Promise<void> {
+  loadWalletMomoPayoutRecords()
   await loadWalletData()
 }
 
@@ -531,6 +553,8 @@ function renderWalletDashboard(): void {
   const platformCommission = calculateShare(totalWasteValue, 20)
   const driverAssignedMoney = calculateShare(totalWasteValue, 30)
   const recyclerCompanyMoney = calculateShare(totalWasteValue, 50)
+  const driverPayout = getWalletMomoPayoutProgress('driver', driverAssignedMoney)
+  const recyclerPayout = getWalletMomoPayoutProgress('recycler', recyclerCompanyMoney)
 
   showWalletContent(`
     <div id="walletModalRoot"></div>
@@ -538,8 +562,8 @@ function renderWalletDashboard(): void {
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
       ${walletMetricCard('Total E-Waste Value', formatMoney(totalWasteValue), 'All listed e-waste')}
       ${walletClickableMetricCard('Platform commission', formatMoney(platformCommission), '20% system commission', 'platform')}
-      ${walletClickableMetricCard('Driver assigned', formatMoney(driverAssignedMoney), '30% assigned to drivers', 'driver')}
-      ${walletClickableMetricCard('Recycler company', formatMoney(recyclerCompanyMoney), '50% recycler company share', 'recycler')}
+      ${walletPayoutMetricCard('Driver assigned', driverPayout, '30% assigned to drivers', 'driver')}
+      ${walletPayoutMetricCard('Recycler company', recyclerPayout, '50% recycler company share', 'recycler')}
     </div>
 
     <div class="flex flex-col gap-3 rounded-[24px] bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
@@ -548,7 +572,7 @@ function renderWalletDashboard(): void {
           E-Waste Money Distribution
         </h3>
         <p class="mt-1 text-xs font-semibold text-slate-400">
-          Calculated from all listed e-waste using final price first, then expected price when final price is missing.
+          Driver and recycler shares can be paid using Mobile Money. Completed payments remain saved after page refresh.
         </p>
       </div>
 
@@ -557,7 +581,7 @@ function renderWalletDashboard(): void {
       </button>
     </div>
 
-    <section class="grid gap-5 xl:grid-cols-[420px_1fr]">
+    <section class="grid gap-5 xl:grid-cols-[460px_1fr]">
       <div class="space-y-5">
         <div class="rounded-[24px] bg-white p-5 shadow-sm">
           <h3 class="text-lg font-black text-[#020617]">
@@ -565,7 +589,7 @@ function renderWalletDashboard(): void {
           </h3>
 
           <p class="mt-1 text-xs font-semibold text-slate-400">
-            Click a balance type to see detailed commission by e-waste item.
+            Pay the assigned driver and recycler company using MoMo, then view the payment status and remaining balance.
           </p>
 
           <div class="mt-4 space-y-3">
@@ -613,6 +637,7 @@ function renderWalletDashboard(): void {
   })
 
   bindWalletShareCards()
+  bindWalletMomoPaymentButtons()
 }
 
 function renderWasteMoneyTable(listings: WasteListing[]): string {
@@ -683,17 +708,19 @@ function renderCalculatedWalletBalances(
     }),
     renderAssignedBalanceCard({
       title: 'Driver assigned',
-      subtitle: 'Driver commission based on assigned pickups',
+      subtitle: 'Money to pay to the assigned driver or drivers',
       percent: '30%',
       amount: driverAssignedMoney,
       modalType: 'driver',
+      payableType: 'driver',
     }),
     renderAssignedBalanceCard({
       title: 'Recycler company',
-      subtitle: 'Recycler company share',
+      subtitle: 'Money to pay to the recycler company',
       percent: '50%',
       amount: recyclerCompanyMoney,
       modalType: 'recycler',
+      payableType: 'recycler',
     }),
   ].join('')
 }
@@ -704,14 +731,30 @@ function renderAssignedBalanceCard(data: {
   percent: string
   amount: number
   modalType?: string
+  payableType?: WalletPayableType
 }): string {
-  const modalAttribute = data.modalType ? `data-wallet-modal="${escapeAttribute(data.modalType)}"` : ''
+  const payout = data.payableType
+    ? getWalletMomoPayoutProgress(data.payableType, data.amount)
+    : null
+
+  const isPaid = Boolean(payout?.isPaid && payout.assigned > 0)
+  const borderClass = isPaid ? 'border-green-200 bg-green-50/40' : 'border-slate-100 bg-white'
 
   return `
-    <article ${modalAttribute} class="cursor-pointer rounded-2xl border border-slate-100 p-4 transition hover:border-[#020617] hover:bg-[#f6f8fc]">
+    <article class="rounded-2xl border ${borderClass} p-4 transition hover:border-[#020617]">
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0 flex-1">
-          <p class="truncate font-black text-[#020617]">${escapeHtml(data.title)}</p>
+          <div class="flex flex-wrap items-center gap-2">
+            <p class="font-black text-[#020617]">${escapeHtml(data.title)}</p>
+            ${
+              isPaid
+                ? '<span class="rounded-full bg-green-100 px-2.5 py-1 text-[10px] font-black uppercase text-green-700">Paid successfully</span>'
+                : data.payableType
+                  ? '<span class="rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-black uppercase text-amber-700">Payment pending</span>'
+                  : ''
+            }
+          </div>
+
           <p class="mt-1 text-xs font-semibold text-slate-400">${escapeHtml(data.subtitle)}</p>
           <p class="mt-2 inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-700">
             ${escapeHtml(data.percent)}
@@ -719,14 +762,86 @@ function renderAssignedBalanceCard(data: {
         </div>
 
         <div class="text-right">
-          <p class="text-xs font-black uppercase text-slate-400">Assigned</p>
-          <p class="mt-1 text-sm font-black text-green-700">
-            ${escapeHtml(formatMoney(data.amount))}
+          <p class="text-xs font-black uppercase text-slate-400">
+            ${data.payableType ? 'Assigned' : 'Commission'}
           </p>
-          <p class="mt-1 text-[10px] font-black uppercase text-blue-700">
-            Click view
+          <p class="mt-1 text-sm font-black text-[#020617]">
+            ${escapeHtml(formatMoneyWithDecimals(data.amount))}
           </p>
         </div>
+      </div>
+
+      ${
+        payout
+          ? `
+            <div class="mt-4 grid grid-cols-2 gap-3 rounded-xl bg-white p-3 ring-1 ring-slate-100">
+              <div>
+                <p class="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Paid</p>
+                <p class="mt-1 text-sm font-black text-green-700">${escapeHtml(formatMoneyWithDecimals(payout.paid))}</p>
+              </div>
+              <div class="text-right">
+                <p class="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Remaining</p>
+                <p class="mt-1 text-sm font-black ${payout.remaining <= 0 ? 'text-green-700' : 'text-red-700'}">
+                  ${escapeHtml(formatMoneyWithDecimals(payout.remaining))}
+                </p>
+              </div>
+            </div>
+
+            ${
+              isPaid
+                ? `
+                  <div class="mt-3 rounded-xl bg-green-100 px-3 py-2 text-xs font-bold text-green-800">
+                    ✓ ${escapeHtml(data.title)} got the payment through MoMo
+                    ${payout.reference ? `<span class="block mt-1 text-[10px]">Reference: ${escapeHtml(payout.reference)}</span>` : ''}
+                  </div>
+                `
+                : ''
+            }
+          `
+          : ''
+      }
+
+      <div class="mt-4 grid gap-2 ${data.payableType ? 'grid-cols-2' : 'grid-cols-1'}">
+        ${
+          data.modalType
+            ? `
+              <button
+                type="button"
+                data-wallet-modal="${escapeAttribute(data.modalType)}"
+                class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-black text-[#020617] transition hover:border-[#020617]"
+              >
+                View details
+              </button>
+            `
+            : ''
+        }
+
+        ${
+          data.payableType
+            ? `
+              <button
+                type="button"
+                data-wallet-pay="${escapeAttribute(data.payableType)}"
+                ${payout && (payout.remaining <= 0 || payout.assigned <= 0) ? 'disabled' : ''}
+                class="rounded-xl px-3 py-2.5 text-xs font-black text-white transition ${
+                  payout && payout.remaining <= 0
+                    ? 'cursor-not-allowed bg-green-600'
+                    : payout && payout.assigned <= 0
+                      ? 'cursor-not-allowed bg-slate-300'
+                      : 'bg-[#ffcc00] text-[#020617] hover:bg-[#f2c200]'
+                }"
+              >
+                ${
+                  payout && payout.remaining <= 0
+                    ? '✓ Paid successfully'
+                    : payout && payout.assigned <= 0
+                      ? 'No amount to pay'
+                      : 'Pay Now • MoMo'
+                }
+              </button>
+            `
+            : ''
+        }
       </div>
     </article>
   `
@@ -864,11 +979,67 @@ function walletClickableMetricCard(label: string, value: string, helper: string,
   `
 }
 
+function walletPayoutMetricCard(
+  label: string,
+  payout: WalletMomoPayoutProgress,
+  helper: string,
+  modalType: WalletPayableType,
+): string {
+  return `
+    <article class="rounded-[24px] bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <p class="text-[11px] font-black uppercase tracking-[0.14em] text-slate-400">
+            ${escapeHtml(label)}
+          </p>
+          <p class="mt-2 text-2xl font-black ${payout.remaining <= 0 && payout.assigned > 0 ? 'text-green-700' : 'text-[#020617]'}">
+            ${escapeHtml(formatMoneyWithDecimals(payout.remaining))}
+          </p>
+          <p class="mt-1 text-xs font-semibold text-slate-400">
+            Remaining to pay • ${escapeHtml(helper)}
+          </p>
+        </div>
+
+        <span class="rounded-full px-3 py-1 text-[10px] font-black uppercase ${
+          payout.remaining <= 0 && payout.assigned > 0
+            ? 'bg-green-50 text-green-700'
+            : 'bg-amber-50 text-amber-700'
+        }">
+          ${payout.remaining <= 0 && payout.assigned > 0 ? 'Paid' : 'Pending'}
+        </span>
+      </div>
+
+      <div class="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
+        <div class="text-[10px] font-bold text-slate-500">
+          Assigned: ${escapeHtml(formatMoneyWithDecimals(payout.assigned))}<br>
+          Paid: ${escapeHtml(formatMoneyWithDecimals(payout.paid))}
+        </div>
+
+        <button type="button" data-wallet-modal="${escapeAttribute(modalType)}" class="rounded-lg bg-slate-100 px-3 py-2 text-[10px] font-black text-[#020617] hover:bg-slate-200">
+          Details
+        </button>
+      </div>
+    </article>
+  `
+}
+
 function bindWalletShareCards(): void {
   document.querySelectorAll<HTMLElement>('[data-wallet-modal]').forEach((element) => {
     element.addEventListener('click', () => {
       const type = element.dataset.walletModal || ''
       openWalletModal(type)
+    })
+  })
+}
+
+function bindWalletMomoPaymentButtons(scope: ParentNode = document): void {
+  scope.querySelectorAll<HTMLButtonElement>('[data-wallet-pay]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const type = button.dataset.walletPay
+
+      if (type === 'driver' || type === 'recycler') {
+        openMomoPaymentModal(type)
+      }
     })
   })
 }
@@ -911,6 +1082,8 @@ function openWalletModal(type: string): void {
   `
 
   document.querySelector<HTMLButtonElement>('#closeWalletModalButton')?.addEventListener('click', closeWalletModal)
+  bindWalletMomoPaymentButtons(root)
+
   root.querySelector('.fixed')?.addEventListener('click', (event) => {
     if (event.target === event.currentTarget) {
       closeWalletModal()
@@ -926,13 +1099,160 @@ function closeWalletModal(): void {
   }
 }
 
+
+function openMomoPaymentModal(type: WalletPayableType): void {
+  const root = document.querySelector<HTMLDivElement>('#walletModalRoot')
+
+  if (!root) {
+    return
+  }
+
+  const assignedAmount = getAssignedPayoutAmount(type)
+  const payout = getWalletMomoPayoutProgress(type, assignedAmount)
+  const recipientLabel = type === 'driver' ? 'Assigned driver(s)' : 'Recycler company'
+  const defaultPhone = getDefaultMomoPhone(type)
+
+  if (payout.assigned <= 0) {
+    showWalletMessage(`No ${recipientLabel.toLowerCase()} amount is available to pay.`, 'info')
+    return
+  }
+
+  if (payout.remaining <= 0) {
+    showWalletMessage(`${recipientLabel} has already been paid successfully. Remaining: 0.00 RWF.`, 'success')
+    return
+  }
+
+  root.innerHTML = `
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6">
+      <div class="w-full max-w-lg overflow-hidden rounded-[28px] bg-white shadow-2xl">
+        <div class="bg-[#ffcc00] px-6 py-5 text-[#020617]">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="text-[10px] font-black uppercase tracking-[0.2em]">Mobile Money Payment</p>
+              <h2 class="mt-1 text-2xl font-black">Pay ${escapeHtml(recipientLabel)}</h2>
+              <p class="mt-1 text-sm font-bold opacity-75">Send the remaining payout using MoMo.</p>
+            </div>
+
+            <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#020617] text-sm font-black text-white">
+              MoMo
+            </div>
+          </div>
+        </div>
+
+        <form id="walletMomoPaymentForm" class="space-y-5 p-6">
+          <input type="hidden" name="payment_type" value="${escapeAttribute(type)}" />
+
+          <div class="grid grid-cols-3 gap-3">
+            <div class="rounded-xl bg-slate-50 p-3">
+              <p class="text-[10px] font-black uppercase text-slate-400">Assigned</p>
+              <p class="mt-1 text-xs font-black text-[#020617]">${escapeHtml(formatMoneyWithDecimals(payout.assigned))}</p>
+            </div>
+            <div class="rounded-xl bg-green-50 p-3">
+              <p class="text-[10px] font-black uppercase text-green-600">Already paid</p>
+              <p class="mt-1 text-xs font-black text-green-700">${escapeHtml(formatMoneyWithDecimals(payout.paid))}</p>
+            </div>
+            <div class="rounded-xl bg-red-50 p-3">
+              <p class="text-[10px] font-black uppercase text-red-500">Pay now</p>
+              <p class="mt-1 text-xs font-black text-red-700">${escapeHtml(formatMoneyWithDecimals(payout.remaining))}</p>
+            </div>
+          </div>
+
+          <div>
+            <label class="mb-2 block text-xs font-black text-slate-700">Recipient MoMo phone number</label>
+            <input
+              name="phone"
+              type="tel"
+              value="${escapeAttribute(defaultPhone)}"
+              placeholder="0788000000"
+              autocomplete="tel"
+              required
+              class="h-12 w-full rounded-xl border border-slate-200 px-4 text-sm font-black text-[#020617] outline-none focus:border-[#ffcc00] focus:ring-4 focus:ring-yellow-100"
+            />
+            <p class="mt-2 text-[11px] font-semibold text-slate-400">
+              Use a Rwanda mobile number such as 0788000000 or +250788000000.
+            </p>
+          </div>
+
+          <div class="rounded-xl border border-blue-100 bg-blue-50 p-3 text-xs font-bold text-blue-800">
+            ${escapeHtml(recipientLabel)} will be marked as paid after this MoMo payment succeeds.
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <button id="cancelWalletMomoButton" type="button" class="h-12 rounded-xl border border-slate-200 bg-white text-sm font-black text-slate-600 hover:bg-slate-50">
+              Cancel
+            </button>
+            <button id="confirmWalletMomoButton" type="submit" class="h-12 rounded-xl bg-[#020617] text-sm font-black text-white transition hover:bg-[#0b1633] disabled:cursor-not-allowed disabled:opacity-60">
+              Pay ${escapeHtml(formatMoneyWithDecimals(payout.remaining))}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `
+
+  document.querySelector<HTMLButtonElement>('#cancelWalletMomoButton')?.addEventListener('click', closeWalletModal)
+  root.querySelector('.fixed')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) {
+      closeWalletModal()
+    }
+  })
+
+  document.querySelector<HTMLFormElement>('#walletMomoPaymentForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault()
+
+    if (isProcessingMomoPayment) {
+      return
+    }
+
+    const form = event.currentTarget as HTMLFormElement
+    const formData = new FormData(form)
+    const phone = normalizeRwandaMomoPhone(String(formData.get('phone') || ''))
+    const button = document.querySelector<HTMLButtonElement>('#confirmWalletMomoButton')
+
+    if (!isValidRwandaMomoPhone(phone)) {
+      showWalletMessage('Enter a valid Rwanda MoMo phone number.', 'error')
+      form.querySelector<HTMLInputElement>('input[name="phone"]')?.focus()
+      return
+    }
+
+    isProcessingMomoPayment = true
+
+    if (button) {
+      button.disabled = true
+      button.textContent = 'Processing MoMo...'
+    }
+
+    try {
+      await waitForMomoProcessing()
+
+      const reference = createMomoReference(type)
+      recordWalletMomoPayout(type, payout.remaining, phone, reference)
+      closeWalletModal()
+      renderWalletDashboard()
+      showWalletMessage(
+        `${recipientLabel} paid successfully through MoMo. Paid: ${formatMoneyWithDecimals(payout.remaining)}. Remaining: 0.00 RWF. Reference: ${reference}`,
+        'success',
+      )
+    } catch (error: unknown) {
+      showWalletMessage(getErrorMessage(error, 'MoMo payment failed. Please try again.'), 'error')
+
+      if (button) {
+        button.disabled = false
+        button.textContent = `Pay ${formatMoneyWithDecimals(payout.remaining)}`
+      }
+    } finally {
+      isProcessingMomoPayment = false
+    }
+  })
+}
+
 function getWalletModalContent(type: string): { title: string; description: string; html: string } {
   if (type === 'driver') {
     const rows = getDriverShareRows()
     return {
       title: 'Driver assigned',
       description: '30% share distributed by assigned pickup driver. If more than one driver is assigned to one e-waste item, the driver share is split between them.',
-      html: renderShareRowsTable(rows),
+      html: renderShareRowsTable(rows, 'driver'),
     }
   }
 
@@ -941,7 +1261,7 @@ function getWalletModalContent(type: string): { title: string; description: stri
     return {
       title: 'Recycler company',
       description: '50% share for recycler company per listed e-waste item.',
-      html: renderShareRowsTable(rows),
+      html: renderShareRowsTable(rows, 'recycler'),
     }
   }
 
@@ -1025,7 +1345,7 @@ function getRecyclerShareRows(): WalletShareRow[] {
 }
 
 function getRecyclerCompanyName(listing: WasteListing): string {
-  const record = listing as Record<string, unknown>
+  const record = listing as unknown as Record<string, unknown>
   const possibleObject = record.recyclerCompany || record.recycler_company || record.recycler || record.company
 
   if (possibleObject && typeof possibleObject === 'object') {
@@ -1041,21 +1361,44 @@ function getRecyclerCompanyName(listing: WasteListing): string {
   ]) || 'Recycler company'
 }
 
-function renderShareRowsTable(rows: WalletShareRow[]): string {
+function renderShareRowsTable(rows: WalletShareRow[], payableType?: WalletPayableType): string {
   const total = rows.reduce((sum, row) => sum + row.amount, 0)
+  const payout = payableType ? getWalletMomoPayoutProgress(payableType, total) : null
 
   if (!rows.length) {
     return emptyBox('No breakdown records found.')
   }
 
   return `
-    <div class="mb-4 grid gap-4 md:grid-cols-2">
+    <div class="mb-4 grid gap-4 ${payout ? 'md:grid-cols-4' : 'md:grid-cols-2'}">
       ${walletMetricCard('Records', String(rows.length), 'Breakdown rows')}
-      ${walletMetricCard('Total Amount', formatMoney(total), 'Calculated total')}
+      ${walletMetricCard('Assigned Amount', formatMoneyWithDecimals(total), 'Calculated total')}
+      ${payout ? walletMetricCard('Paid', formatMoneyWithDecimals(payout.paid), payout.reference || 'No payment yet') : ''}
+      ${payout ? walletMetricCard('Remaining', formatMoneyWithDecimals(payout.remaining), payout.isPaid ? 'Paid successfully' : 'Waiting for payment') : ''}
     </div>
 
+    ${
+      payout && payout.isPaid && payout.assigned > 0
+        ? `
+          <div class="mb-4 rounded-2xl border border-green-200 bg-green-50 p-4 text-green-800">
+            <p class="font-black">✓ Paid successfully through MoMo</p>
+            <p class="mt-1 text-xs font-bold">Remaining: 0.00 RWF</p>
+            ${payout.phone ? `<p class="mt-1 text-xs font-bold">Phone: ${escapeHtml(formatRwandaPhoneForDisplay(payout.phone))}</p>` : ''}
+            ${payout.reference ? `<p class="mt-1 text-xs font-bold">Reference: ${escapeHtml(payout.reference)}</p>` : ''}
+            ${payout.paidAt ? `<p class="mt-1 text-xs font-bold">Paid at: ${escapeHtml(formatWalletDate(payout.paidAt))}</p>` : ''}
+          </div>
+        `
+        : payout
+          ? `
+            <button type="button" data-wallet-pay="${escapeAttribute(payableType || '')}" class="mb-4 w-full rounded-xl bg-[#ffcc00] px-4 py-3 text-sm font-black text-[#020617] hover:bg-[#f2c200]">
+              Pay Now with MoMo • ${escapeHtml(formatMoneyWithDecimals(payout.remaining))}
+            </button>
+          `
+          : ''
+    }
+
     <div class="overflow-x-auto rounded-2xl border border-slate-100">
-      <table class="w-full min-w-[820px] border-collapse text-left">
+      <table class="w-full min-w-[900px] border-collapse text-left">
         <thead>
           <tr class="border-b border-slate-200 bg-[#f6f8fc]">
             <th class="px-3 py-3 text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Assigned To</th>
@@ -1063,6 +1406,7 @@ function renderShareRowsTable(rows: WalletShareRow[]): string {
             <th class="px-3 py-3 text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Reference</th>
             <th class="px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">E-Waste Value</th>
             <th class="px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Assigned Amount</th>
+            ${payout ? '<th class="px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Payment</th>' : ''}
           </tr>
         </thead>
         <tbody>
@@ -1072,7 +1416,12 @@ function renderShareRowsTable(rows: WalletShareRow[]): string {
               <td class="min-w-[220px] px-3 py-3 text-xs font-bold text-slate-600">${escapeHtml(row.listing)}</td>
               <td class="min-w-[160px] px-3 py-3 text-xs font-bold text-slate-400">${escapeHtml(row.note)}</td>
               <td class="whitespace-nowrap px-3 py-3 text-right text-xs font-black text-slate-700">${escapeHtml(formatMoney(row.base, row.currency || 'RWF'))}</td>
-              <td class="whitespace-nowrap px-3 py-3 text-right text-xs font-black text-green-700">${escapeHtml(formatMoney(row.amount, row.currency || 'RWF'))}</td>
+              <td class="whitespace-nowrap px-3 py-3 text-right text-xs font-black text-green-700">${escapeHtml(formatMoneyWithDecimals(row.amount, row.currency || 'RWF'))}</td>
+              ${
+                payout
+                  ? `<td class="whitespace-nowrap px-3 py-3 text-right"><span class="rounded-full px-3 py-1 text-[10px] font-black uppercase ${payout.isPaid ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}">${payout.isPaid ? 'Paid' : 'Pending'}</span></td>`
+                  : ''
+              }
             </tr>
           `).join('')}
         </tbody>
@@ -1155,6 +1504,207 @@ function isCreditTransaction(transaction: WalletTransaction): boolean {
   return parseMoney(transaction.amount) >= 0
 }
 
+function createEmptyWalletMomoPayoutRecords(): Record<WalletPayableType, WalletMomoPayoutRecord> {
+  return {
+    driver: {
+      paid_amount: 0,
+      phone: '',
+      reference: '',
+      paid_at: '',
+    },
+    recycler: {
+      paid_amount: 0,
+      phone: '',
+      reference: '',
+      paid_at: '',
+    },
+  }
+}
+
+function loadWalletMomoPayoutRecords(): void {
+  walletMomoPayoutRecords = createEmptyWalletMomoPayoutRecords()
+
+  try {
+    const raw = window.localStorage.getItem(WALLET_MOMO_PAYOUT_STORAGE_KEY)
+
+    if (!raw) {
+      return
+    }
+
+    const parsed = JSON.parse(raw) as Partial<Record<WalletPayableType, Partial<WalletMomoPayoutRecord>>>
+
+    ;(['driver', 'recycler'] as WalletPayableType[]).forEach((type) => {
+      const record = parsed[type]
+
+      if (!record) {
+        return
+      }
+
+      walletMomoPayoutRecords[type] = {
+        paid_amount: Math.max(0, parseMoney(record.paid_amount)),
+        phone: String(record.phone || ''),
+        reference: String(record.reference || ''),
+        paid_at: String(record.paid_at || ''),
+      }
+    })
+  } catch {
+    walletMomoPayoutRecords = createEmptyWalletMomoPayoutRecords()
+  }
+}
+
+function saveWalletMomoPayoutRecords(): void {
+  try {
+    window.localStorage.setItem(
+      WALLET_MOMO_PAYOUT_STORAGE_KEY,
+      JSON.stringify(walletMomoPayoutRecords),
+    )
+  } catch {
+    // The page still works when browser storage is unavailable.
+  }
+}
+
+function recordWalletMomoPayout(
+  type: WalletPayableType,
+  amount: number,
+  phone: string,
+  reference: string,
+): void {
+  const current = walletMomoPayoutRecords[type]
+
+  walletMomoPayoutRecords[type] = {
+    paid_amount: Math.max(0, current.paid_amount + Math.max(0, amount)),
+    phone,
+    reference,
+    paid_at: new Date().toISOString(),
+  }
+
+  saveWalletMomoPayoutRecords()
+}
+
+function getWalletMomoPayoutProgress(
+  type: WalletPayableType,
+  assignedAmount: number,
+): WalletMomoPayoutProgress {
+  const assigned = Math.max(0, parseMoney(assignedAmount))
+  const record = walletMomoPayoutRecords[type]
+  const paid = Math.min(assigned, Math.max(0, parseMoney(record.paid_amount)))
+  const remaining = Math.max(0, assigned - paid)
+
+  return {
+    assigned,
+    paid,
+    remaining,
+    phone: record.phone,
+    reference: record.reference,
+    paidAt: record.paid_at,
+    isPaid: assigned > 0 && remaining <= 0.001,
+  }
+}
+
+function getAssignedPayoutAmount(type: WalletPayableType): number {
+  const totalWasteValue = walletWasteListings.reduce((sum, listing) => {
+    return sum + getListingMoneyValue(listing)
+  }, 0)
+
+  return type === 'driver'
+    ? calculateShare(totalWasteValue, 30)
+    : calculateShare(totalWasteValue, 50)
+}
+
+function getDefaultMomoPhone(type: WalletPayableType): string {
+  if (type === 'driver') {
+    const phone = walletPickups.find((pickup) => pickup.driver?.phone)?.driver?.phone
+    return phone ? formatRwandaPhoneForInput(phone) : ''
+  }
+
+  for (const listing of walletWasteListings) {
+    const phone = getRecyclerCompanyPhone(listing)
+
+    if (phone) {
+      return formatRwandaPhoneForInput(phone)
+    }
+  }
+
+  return ''
+}
+
+function getRecyclerCompanyPhone(listing: WasteListing): string {
+  const record = listing as unknown as Record<string, unknown>
+  const possibleObject = record.recyclerCompany || record.recycler_company || record.recycler || record.company
+
+  if (possibleObject && typeof possibleObject === 'object') {
+    const recycler = possibleObject as Record<string, unknown>
+    const phone = firstString(recycler, ['momo_phone', 'momoPhone', 'phone', 'telephone', 'mobile'])
+
+    if (phone) {
+      return phone
+    }
+  }
+
+  return firstString(record, [
+    'recycler_momo_phone',
+    'recyclerMomoPhone',
+    'recycler_phone',
+    'recyclerPhone',
+    'company_phone',
+  ])
+}
+
+function normalizeRwandaMomoPhone(value: string): string {
+  let digits = String(value || '').replace(/\D/g, '')
+
+  if (digits.startsWith('00')) {
+    digits = digits.slice(2)
+  }
+
+  if (digits.startsWith('0') && digits.length === 10) {
+    digits = `250${digits.slice(1)}`
+  }
+
+  if (digits.length === 9 && digits.startsWith('7')) {
+    digits = `250${digits}`
+  }
+
+  return digits
+}
+
+function isValidRwandaMomoPhone(value: string): boolean {
+  return /^2507\d{8}$/.test(value)
+}
+
+function formatRwandaPhoneForInput(value: string): string {
+  const phone = normalizeRwandaMomoPhone(value)
+
+  if (!isValidRwandaMomoPhone(phone)) {
+    return value
+  }
+
+  return `0${phone.slice(3)}`
+}
+
+function formatRwandaPhoneForDisplay(value: string): string {
+  const phone = normalizeRwandaMomoPhone(value)
+
+  if (!isValidRwandaMomoPhone(phone)) {
+    return value
+  }
+
+  return `+${phone}`
+}
+
+function createMomoReference(type: WalletPayableType): string {
+  const recipientCode = type === 'driver' ? 'DRV' : 'RCY'
+  const randomCode = Math.random().toString(36).slice(2, 8).toUpperCase()
+
+  return `MOMO-${recipientCode}-${Date.now()}-${randomCode}`
+}
+
+function waitForMomoProcessing(): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, 900)
+  })
+}
+
 function parseMoney(value: unknown): number {
   if (value === null || value === undefined || value === '') {
     return 0
@@ -1167,6 +1717,14 @@ function parseMoney(value: unknown): number {
 
 function formatMoney(value: unknown, currency = 'RWF'): string {
   return `${Math.round(parseMoney(value)).toLocaleString()} ${currency || 'RWF'}`
+}
+
+
+function formatMoneyWithDecimals(value: unknown, currency = 'RWF'): string {
+  return `${parseMoney(value).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })} ${currency || 'RWF'}`
 }
 
 function walletStatusClass(status?: string | null): string {
@@ -1833,7 +2391,7 @@ function normalizeUrl(url: string): string {
 }
 
 function getListingLocationText(listing: WasteListing): string {
-  const record = listing as Record<string, unknown>
+  const record = listing as unknown as Record<string, unknown>
 
   const direct = firstString(record, [
     'pickup_address',
@@ -1867,7 +2425,7 @@ function getDriverLocationText(driver: Driver): string {
 }
 
 function getListingCoordinates(listing: WasteListing): { lat: number; lng: number } | null {
-  const record = listing as Record<string, unknown>
+  const record = listing as unknown as Record<string, unknown>
 
   const lat = firstNumber(record, [
     'latitude',
@@ -1893,7 +2451,7 @@ function getListingCoordinates(listing: WasteListing): { lat: number; lng: numbe
 }
 
 function getDriverCoordinates(driver: Driver): { lat: number; lng: number } | null {
-  const record = driver as Record<string, unknown>
+  const record = driver as unknown as Record<string, unknown>
 
   const lat = firstNumber(record, [
     'current_latitude',
